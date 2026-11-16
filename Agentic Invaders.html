@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Agentic Invaders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#05060a;color:#bfe;font-family:'Press Start 2P',monospace;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  #wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%}
+  #bar{display:flex;align-items:center;justify-content:space-between;gap:8px;height:30px;box-sizing:border-box;padding:0 2px}
+  #bar .ttl{font-size:9px;color:#a44}
+  #bar button{font:9px 'Press Start 2P',monospace;background:#0b1a10;color:#7f9;border:1px solid #2d6;border-radius:6px;padding:5px 8px;cursor:pointer}
+  canvas{display:block;background:#000;border:2px solid #301717;border-radius:6px;box-shadow:0 0 34px rgba(255,60,60,.12);touch-action:none}
+  #controls{display:none;width:100%;max-width:520px;gap:10px;padding:10px 12px calc(10px + env(safe-area-inset-bottom));box-sizing:border-box}
+  #controls.show{display:flex}
+  .btn{flex:1;height:64px;border-radius:14px;border:2px solid #2d6;background:#0b1a10;color:#7f9;font:16px 'Press Start 2P',monospace;display:flex;align-items:center;justify-content:center;touch-action:none;cursor:pointer}
+  .btn.fire{flex:1.5;border-color:#e5c;color:#f8d;background:#1a0b16;font-size:12px}
+  .btn.on{background:#1f3a24}
+  .btn.fire.on{background:#3a1430}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="bar">
+    <span class="ttl">AGENTIC INVADERS</span>
+    <span>
+      <button id="pauseBtn" type="button">PAUSE</button>
+      <button id="muteBtn" type="button">SOUND ON</button>
+    </span>
+  </div>
+  <canvas id="c"></canvas>
+  <div id="controls">
+    <div class="btn" id="bL">&#9664;</div>
+    <div class="btn fire" id="bF">FIRE</div>
+    <div class="btn" id="bR">&#9654;</div>
+  </div>
+</div>
+<script>
+(() => {
+'use strict';
+const W = 400, H = 600, PX = 3;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const controls = document.getElementById('controls');
+const bar = document.getElementById('bar');
+const FONT = "'Press Start 2P', monospace";
+const MONO = "bold 9px ui-monospace, Menlo, Consolas, 'Courier New', monospace";
+
+// ---------- Sprites ----------
+const SPR = {
+  model: [[
+    "...XX...","..XXXX..",".XXXXXX.","XX.XX.XX","XXXXXXXX","..X..X..",".X.XX.X.","X.X..X.X"
+  ],[
+    "...XX...","..XXXX..",".XXXXXX.","XX.XX.XX","XXXXXXXX",".X.XX.X.","X......X",".X....X."
+  ]],
+  framework: [[
+    "..X.....X..","...X...X...","..XXXXXXX..",".XX.XXX.XX.","XXXXXXXXXXX","X.XXXXXXX.X","X.X.....X.X","...XX.XX..."
+  ],[
+    "..X.....X..","X..X...X..X","X.XXXXXXX.X","XXX.XXX.XXX","XXXXXXXXXXX",".XXXXXXXXX.","..X.....X..",".X.......X."
+  ]],
+  exploit: [[
+    "....XXXX....",".XXXXXXXXXX.","XXXXXXXXXXXX","XXX..XX..XXX","XXXXXXXXXXXX","...XX..XX...","..XX.XX.XX..","XX........XX"
+  ],[
+    "....XXXX....",".XXXXXXXXXX.","XXXXXXXXXXXX","XXX..XX..XXX","XXXXXXXXXXXX","..XXX..XXX..",".XX..XX..XX.","..XX....XX.."
+  ]],
+  burnout: [[
+    "..XXXXXXX..",".XXXXXXXXX.","XX..XXX..XX","XXXXXXXXXXX","XXX.....XXX","XX.XXXXX.XX","XXXXXXXXXXX",".X.X.X.X.X."
+  ],[
+    "..XXXXXXX..",".XXXXXXXXX.","XX..XXX..XX","XXXXXXXXXXX","XXX.....XXX","XX.XXXXX.XX","XXXXXXXXXXX","X.X.X.X.X.X"
+  ]]
+};
+const PLAYER = [
+  "......X......",".....XXX.....",".....XXX.....",".XXXXXXXXXXX.","XXXXXXXXXXXXX","XXXXXXXXXXXXX","XXXXXXXXXXXXX"
+];
+
+const CATS = {
+  model: {
+    name: 'New AI Models', color: '#ff5fdc', pts: 40, effect: 'Learns shields. Then worse.',
+    labels: ['GPT-7','Gemini 4','Llama 6','Grok 5','Opus 6','Mistral XL','DeepSeek 4','Qwen 4','Nova Pro 2','o5-mini'],
+    quips: ['Deprecated!','Sunset!','Old news!','Benchmarked!','Superseded!']
+  },
+  framework: {
+    name: 'Agentic Frameworks', color: '#4fc8ff', pts: 30, effect: 'Churn. Costs a life.',
+    labels: ['LangChain','CrewAI','AutoGen','LangGraph','Strands','Swarm','LlamaIdx','Agno','v0.0.1-rc','NewFwk.js'],
+    quips: ['npm uninstall!','Archived!','Abandoned!','Breaking change!','Forked!']
+  },
+  exploit: {
+    name: 'Agentic Exploits', color: '#ff5a4f', pts: 20, effect: 'Fast. Costs a life.',
+    labels: ['Prompt Inj','ToolPoison','ConfDeputy','MemPoison','MCP RugPul','Jailbreak','Data Exfil','GoalHijack','Shadow MCP','Indir. PI'],
+    quips: ['Patched!','Sandboxed!','Least privilege!','CVE closed!','Guardrailed!']
+  },
+  burnout: {
+    name: 'Burnout Fatigue', color: '#ffb84f', pts: 10, effect: 'Zzz. Builds fatigue.',
+    labels: ['3am Page','Reorg','Slack Ping','Sprint 47','Unread:4k','Standup #9','Q4 OKRs','On-call','Sync Mtg','PerfReview','Hotfix Fri','Deadline'],
+    quips: ['Logged off!','Boundary set!','Muted!','Nap taken!','Declined!']
+  }
+};
+const ROWS = ['model','framework','exploit','burnout','burnout'];
+const COLS = 5, CELL_W = 64, ROW_H = 44;
+const BUNKER_Y = 460, BUNKER_NAMES = ['EVALS','IAM','SANDBOX','PTO'];
+const PLAYER_Y = 540, GROUND_Y = 572;
+
+// ---------- Escalation schedule (seconds of play) ----------
+const T_SHIELD = 25, T_CONVERGE = 55, T_SPREAD = 70, T_RESPAWN = 80, T_AIM = 100;
+const BANNERS = [
+  { at: T_SHIELD,   title: 'THE MODELS LEARNED TO SHIELD', sub: 'Shields regenerate.' },
+  { at: 42,         title: 'SHIELDS v2',                   sub: 'Thicker. Faster regen.' },
+  { at: T_CONVERGE, title: 'CONVERGENCE',                  sub: 'They have started talking to each other.' },
+  { at: T_SPREAD,   title: 'SHIELDS ARE OPEN SOURCE',      sub: 'Everyone has them now.' },
+  { at: T_RESPAWN,  title: 'RETRAINING',                   sub: 'What you destroy comes back.' },
+  { at: T_AIM,      title: 'THEY CAN SEE YOU',             sub: 'Shots are now aimed.' },
+  { at: 120,        title: 'FASTER',                       sub: '' },
+  { at: 145,        title: 'FASTER',                       sub: '' },
+  { at: 170,        title: 'THERE IS NO END STATE',        sub: '' }
+];
+
+const WAVE_MSG = [
+  'Monday.',
+  'A new model dropped overnight.',
+  'Someone forked your framework.',
+  'The exploit has an exploit.',
+  're:Invent week.',
+  'It is always launch week.'
+];
+const TIPS = [
+  'You do not have to evaluate every model the week it ships.',
+  'Least privilege is a love language.',
+  'The framework will be rewritten next quarter anyway.',
+  'Sleep is a performance optimization.',
+  'Not every ping deserves a pong.',
+  'Treat tool output as untrusted input. Treat your calendar the same way.',
+  'The roadmap will still be there after lunch.',
+  'Nobody keeps up. Some people just stop pretending.'
+];
+const UFO_TYPES = [
+  { kind: 'COFFEE', text: 'COFFEE', color: '#d39a5c' },
+  { kind: 'PTO', text: 'PTO', color: '#7fffa0' },
+  { kind: 'FUNDING', text: '$FUNDING', color: '#ffe066' }
+];
+
+// ---------- State ----------
+let state = 'title';           // title | wave | play | paused | over
+let prevState = 'play';
+let score = 0, hi = 0, best = 0, lives = 3, wave = 1, elapsed = 0;
+let fatigue = 0, coffeeT = 0, invulnT = 0, waveT = 0, stepT = 0, dir = 1, animFrame = 0;
+let eFireT = 1, ufoT = 18, shake = 0, fireCD = 0, overT = 0, marchIdx = 0, respawnT = 6;
+let fx = 180, fy = 80, bannerIdx = 0, banner = null;
+let overReason = '', overTip = '';
+let player = { x: W/2 - 19.5, y: PLAYER_Y, w: PLAYER[0].length*PX, h: PLAYER.length*PX };
+let pBullets = [], eBullets = [], invaders = [], bunkers = [], floaters = [], particles = [], ufo = null;
+const input = { left: false, right: false, fire: false };
+const stars = Array.from({length: 70}, () => ({ x: Math.random()*W, y: Math.random()*H, s: Math.random()*0.8+0.2 }));
+
+try {
+  hi = parseInt(localStorage.getItem('agentic-invaders-hi') || '0', 10) || 0;
+  best = parseFloat(localStorage.getItem('agentic-invaders-best') || '0') || 0;
+} catch (e) {}
+
+const rand = (a, b) => a + Math.random()*(b - a);
+const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const shuffle = arr => { const a = arr.slice(); for (let i = a.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const fmtTime = s => { s = Math.floor(s); return String(Math.floor(s/60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+
+// escalation helpers
+const conv = () => clamp((elapsed - T_CONVERGE)/40, 0, 1);
+function shieldCap(cat) {
+  if (cat === 'model') return elapsed < T_SHIELD ? 0 : Math.min(6, 1 + Math.floor((elapsed - T_SHIELD)/17));
+  return elapsed < T_SPREAD ? 0 : Math.min(4, 1 + Math.floor((elapsed - T_SPREAD)/25));
+}
+const regenDelay = () => Math.max(1.0, 5 - elapsed/45);
+
+// ---------- Audio ----------
+let actx = null, muted = false, noiseBuf = null;
+function audio() {
+  if (!actx) {
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      noiseBuf = actx.createBuffer(1, actx.sampleRate*0.4, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random()*2 - 1;
+    } catch (e) { actx = null; }
+  }
+  if (actx && actx.state === 'suspended') { try { actx.resume(); } catch (e) {} }
+}
+function tone(f, d, type = 'square', v = 0.04, f2) {
+  if (muted || !actx) return;
+  try {
+    const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + d);
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + d + 0.02);
+  } catch (e) {}
+}
+function noise(d, v = 0.08, freq = 1200) {
+  if (muted || !actx || !noiseBuf) return;
+  try {
+    const t = actx.currentTime, s = actx.createBufferSource(), g = actx.createGain(), f = actx.createBiquadFilter();
+    s.buffer = noiseBuf; f.type = 'bandpass'; f.frequency.value = freq;
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    s.connect(f); f.connect(g); g.connect(actx.destination); s.start(t); s.stop(t + d);
+  } catch (e) {}
+}
+const MARCH = [98, 87, 78, 73];
+let lastShotSound = 0;
+
+// ---------- Setup ----------
+function makeBunker(cx) {
+  const cols = 18, rows = 12, g = [];
+  for (let r = 0; r < rows; r++) {
+    g[r] = [];
+    for (let c = 0; c < cols; c++) {
+      let on = 1;
+      if (r < 4 && (c < 4 - r || c > cols - 1 - (4 - r))) on = 0;
+      if ((r === 6 && c >= 7 && c <= 10) || (r === 7 && c >= 6 && c <= 11) || (r >= 8 && c >= 5 && c <= 12)) on = 0;
+      g[r][c] = on;
+    }
+  }
+  return { x: Math.round(cx - cols*PX/2), y: BUNKER_Y, cols, rows, g };
+}
+
+function setupWave(n) {
+  wave = n;
+  invaders = [];
+  fy = 80 + Math.min(n - 1, 6)*10;
+  fx = 20 + COLS*CELL_W/2;
+  const used = {};
+  ROWS.forEach((cat, r) => {
+    if (!used[cat]) used[cat] = shuffle(CATS[cat].labels);
+    for (let c = 0; c < COLS; c++) {
+      const w = SPR[cat][0][0].length*PX;
+      const label = used[cat].shift() || pick(CATS[cat].labels);
+      const cap = shieldCap(cat);
+      invaders.push({ cat, label, col: c, row: r, w, h: 24, alive: true, x: 0, y: 0,
+        shield: cap, regenT: regenDelay(), flash: 0 });
+    }
+  });
+  layout();
+  // Bunkers are only built once. Damage carries over. Nobody is coming to repair them.
+  if (n === 1) bunkers = [0,1,2,3].map(i => makeBunker(W*(i+1)/5));
+  pBullets = []; eBullets = []; ufo = null;
+  dir = 1; stepT = 0.5; eFireT = 1.6; ufoT = rand(14, 22); marchIdx = 0;
+  state = 'wave'; waveT = 2.4;
+}
+
+function startGame() {
+  audio();
+  score = 0; lives = 3; fatigue = 0; coffeeT = 0; invulnT = 0; elapsed = 0;
+  bannerIdx = 0; banner = null; respawnT = 6;
+  floaters = []; particles = [];
+  player.x = W/2 - player.w/2;
+  setupWave(1);
+}
+
+function gameOver(reason) {
+  state = 'over'; overT = 1.2; overReason = reason; overTip = pick(TIPS);
+  if (score > hi) hi = score;
+  if (elapsed > best) best = elapsed;
+  try { localStorage.setItem('agentic-invaders-hi', String(hi)); localStorage.setItem('agentic-invaders-best', String(best)); } catch (e) {}
+  tone(220, 0.25, 'sawtooth', 0.05, 110);
+  setTimeout(() => tone(147, 0.5, 'sawtooth', 0.05, 55), 250);
+  setTimeout(() => tone(73, 1.2, 'sawtooth', 0.05, 36), 750);
+}
+
+// ---------- Formation layout ----------
+function layout() {
+  const c = conv();
+  const sx = CELL_W*(1 - 0.45*c), sy = ROW_H*(1 - 0.3*c);
+  for (const i of invaders) {
+    i.x = fx + (i.col - (COLS - 1)/2)*sx - i.w/2;
+    i.y = fy + i.row*sy;
+  }
+  // keep the (shrinking) formation on screen
+  let minX = Infinity, maxX = -Infinity;
+  for (const i of invaders) if (i.alive) { minX = Math.min(minX, i.x); maxX = Math.max(maxX, i.x + i.w); }
+  let shift = 0;
+  if (minX < 6) shift = 6 - minX; else if (maxX > W - 6) shift = W - 6 - maxX;
+  if (shift) { fx += shift; for (const i of invaders) i.x += shift; }
+}
+
+// ---------- Helpers ----------
+const hit = (ax, ay, aw, ah, bx, by, bw, bh) => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+
+function erode(b, r, c, R) {
+  for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+    const rr = r + dr, cc = c + dc;
+    if (rr < 0 || cc < 0 || rr >= b.rows || cc >= b.cols) continue;
+    if (dr*dr + dc*dc <= R*R && Math.random() < 0.7) b.g[rr][cc] = 0;
+  }
+  b.g[r][c] = 0;
+}
+function bunkerHit(x, y, w, h, R) {
+  for (const b of bunkers) {
+    if (!hit(x, y, w, h, b.x, b.y, b.cols*PX, b.rows*PX)) continue;
+    const c0 = Math.max(0, Math.floor((x - b.x)/PX)), c1 = Math.min(b.cols - 1, Math.floor((x + w - b.x)/PX));
+    const r0 = Math.max(0, Math.floor((y - b.y)/PX)), r1 = Math.min(b.rows - 1, Math.floor((y + h - b.y)/PX));
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+      if (b.g[r][c]) { erode(b, r, c, R); return true; }
+    }
+  }
+  return false;
+}
+function bunkerClear(x, y, w, h) {
+  for (const b of bunkers) {
+    if (!hit(x, y, w, h, b.x, b.y, b.cols*PX, b.rows*PX)) continue;
+    const c0 = Math.max(0, Math.floor((x - b.x)/PX)), c1 = Math.min(b.cols - 1, Math.floor((x + w - b.x)/PX));
+    const r0 = Math.max(0, Math.floor((y - b.y)/PX)), r1 = Math.min(b.rows - 1, Math.floor((y + h - b.y)/PX));
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) b.g[r][c] = 0;
+  }
+}
+function floater(text, x, y, color, big) {
+  if (floaters.length > 40) floaters.shift();
+  floaters.push({ text, x, y, color, t: 1.3, big: !!big });
+}
+function burst(x, y, color, n = 14) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random()*Math.PI*2, s = rand(40, 160);
+    particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s, t: rand(0.3, 0.7), color });
+  }
+  if (particles.length > 600) particles.splice(0, particles.length - 600);
+}
+function loseLife(reason, quip) {
+  lives--;
+  burst(player.x + player.w/2, player.y + 10, '#7fff9f', 26);
+  noise(0.5, 0.12, 400);
+  shake = 0.35; invulnT = 2.0;
+  floater(quip, player.x + player.w/2, player.y - 14, '#ffffff', true);
+  eBullets = [];
+  if (lives <= 0) gameOver(reason);
+}
+function stepInterval() {
+  const alive = invaders.reduce((n, i) => n + (i.alive ? 1 : 0), 0);
+  const base = Math.max(0.14, 0.62 - (wave - 1)*0.06) * (1 - 0.5*conv());
+  return 0.025 + base*Math.pow(Math.max(1, alive)/invaders.length, 0.9);
+}
+
+// ---------- Update ----------
+function update(dt) {
+  const starSpd = 12*(1 + elapsed/40);
+  for (const s of stars) { s.y += s.s*starSpd*dt; if (s.y > H) { s.y = 0; s.x = Math.random()*W; } }
+  for (const p of particles) { p.x += p.vx*dt; p.y += p.vy*dt; p.vy += 120*dt; p.t -= dt; }
+  particles = particles.filter(p => p.t > 0);
+  for (const f of floaters) { f.y -= 26*dt; f.t -= dt; }
+  floaters = floaters.filter(f => f.t > 0);
+  shake = Math.max(0, shake - dt);
+  if (banner) { banner.t -= dt; if (banner.t <= 0) banner = null; }
+
+  if (state === 'over') { overT -= dt; return; }
+  if (state === 'wave') { waveT -= dt; if (waveT <= 0) state = 'play'; return; }
+  if (state !== 'play') return;
+
+  elapsed += dt;
+  while (bannerIdx < BANNERS.length && elapsed >= BANNERS[bannerIdx].at) {
+    banner = { ...BANNERS[bannerIdx], t: 3.2 };
+    bannerIdx++;
+    tone(55, 1.0, 'sawtooth', 0.06, 41); noise(0.6, 0.05, 200);
+    shake = Math.max(shake, 0.2);
+  }
+
+  // Player
+  const slow = 1 - 0.5*fatigue;
+  const mv = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  player.x = clamp(player.x + mv*200*slow*dt, 6, W - 6 - player.w);
+  fireCD -= dt;
+  const maxB = coffeeT > 0 ? 5 : 2;
+  if (input.fire && fireCD <= 0 && pBullets.length < maxB) {
+    pBullets.push({ x: player.x + player.w/2 - 1, y: player.y - 6 });
+    fireCD = (coffeeT > 0 ? 0.13 : 0.38)*(1 + fatigue);
+    tone(880, 0.08, 'square', 0.025, 440);
+  }
+  coffeeT = Math.max(0, coffeeT - dt);
+  invulnT = Math.max(0, invulnT - dt);
+  fatigue = Math.max(0, fatigue - (elapsed < T_CONVERGE ? 0.025 : 0.01)*dt);
+
+  // Shields grow and regenerate
+  for (const i of invaders) {
+    i.flash = Math.max(0, i.flash - dt);
+    if (!i.alive) continue;
+    const cap = shieldCap(i.cat);
+    if (i.shield < cap) {
+      i.regenT -= dt;
+      if (i.regenT <= 0) { i.shield++; i.regenT = regenDelay(); }
+    }
+  }
+
+  // Formation converges
+  layout();
+
+  // Player bullets
+  for (const b of pBullets) {
+    b.y -= 480*dt;
+    if (b.y < 28) { b.dead = true; continue; }
+    if (bunkerHit(b.x, b.y, 2, 8, 1)) { b.dead = true; continue; }
+    if (ufo && hit(b.x, b.y, 2, 8, ufo.x, ufo.y, ufo.w, ufo.h)) {
+      b.dead = true; hitUfo(); continue;
+    }
+    for (const inv of invaders) {
+      if (!inv.alive) continue;
+      if (hit(b.x, b.y, 2, 8, inv.x - 3, inv.y - 3, inv.w + 6, inv.h + 6)) {
+        b.dead = true;
+        if (inv.shield > 0) {
+          inv.shield--; inv.flash = 0.12; inv.regenT = regenDelay();
+          burst(b.x, inv.y + inv.h + 2, '#bff4ff', 5);
+          tone(1400, 0.05, 'triangle', 0.025, 1800);
+          break;
+        }
+        inv.alive = false;
+        const cat = CATS[inv.cat];
+        score += cat.pts;
+        burst(inv.x + inv.w/2, inv.y + 12, cat.color);
+        floater(pick(cat.quips), inv.x + inv.w/2, inv.y, cat.color);
+        noise(0.15, 0.06, 1800);
+        tone(300, 0.12, 'square', 0.03, 80);
+        break;
+      }
+    }
+    if (b.dead) continue;
+    for (const e of eBullets) {
+      if (!e.dead && hit(b.x, b.y, 2, 8, e.x - 3, e.y, 6, 10)) {
+        e.dead = true; b.dead = true;
+        burst(e.x, e.y, '#ffffff', 5);
+        break;
+      }
+    }
+  }
+  pBullets = pBullets.filter(b => !b.dead);
+  eBullets = eBullets.filter(b => !b.dead);
+
+  // Invader march
+  stepT -= dt;
+  if (stepT <= 0) { stepT = stepInterval(); march(); }
+
+  // Retraining: the dead come back
+  if (elapsed > T_RESPAWN) {
+    respawnT -= dt;
+    if (respawnT <= 0) {
+      respawnT = Math.max(1.0, 7 - (elapsed - T_RESPAWN)/12);
+      const dead = invaders.filter(i => !i.alive);
+      if (dead.length && invaders.some(i => i.alive)) {
+        const r = pick(dead);
+        r.alive = true; r.shield = shieldCap(r.cat); r.regenT = regenDelay(); r.flash = 0.3;
+        layout();
+        floater('Retrained.', r.x + r.w/2, r.y, '#ff6060');
+        tone(110, 0.3, 'sawtooth', 0.03, 220);
+      }
+    }
+  }
+
+  // Enemy fire: faster and faster
+  eFireT -= dt;
+  const late = Math.max(0, elapsed - T_CONVERGE);
+  const accel = Math.max(0.025, Math.pow(0.5, late/22));
+  const maxE = Math.min(90, 3 + Math.min(wave, 6) + Math.floor(late/3));
+  if (eFireT <= 0) {
+    eFireT = rand(0.35, 1.1)*Math.max(0.35, 1 - (wave - 1)*0.12)*accel;
+    const volley = 1 + Math.floor(Math.max(0, elapsed - 75)/16);
+    for (let v = 0; v < volley && eBullets.length < maxE; v++) enemyFire();
+  }
+  const spdMul = (1 + (wave - 1)*0.06)*Math.min(2.6, 1 + late/70);
+  for (const e of eBullets) {
+    const sp = { model: 170, framework: 200, exploit: 270, burnout: 130 }[e.cat];
+    e.y += sp*spdMul*dt; e.x += (e.vx || 0)*dt; e.t += dt;
+    if (e.y > GROUND_Y || e.x < -10 || e.x > W + 10) { e.dead = true; if (e.y > GROUND_Y) burst(e.x, GROUND_Y, CATS[e.cat].color, 3); continue; }
+    if (bunkerHit(e.x - 3, e.y, 6, 10, 2)) { e.dead = true; continue; }
+    if (hit(e.x - 3, e.y, 6, 10, player.x, player.y, player.w, player.h)) {
+      e.dead = true;
+      if (invulnT > 0) continue;
+      if (e.cat === 'burnout') {
+        fatigue = Math.min(1, fatigue + 0.34);
+        tone(200, 0.3, 'triangle', 0.05, 90);
+        floater('Zzz... +fatigue', player.x + player.w/2, player.y - 12, '#ffb84f');
+        if (fatigue >= 0.999) { fatigue = 0; loseLife('BURNED OUT', 'BURNED OUT!'); }
+      } else if (e.cat === 'exploit') {
+        loseLife('BREACHED', 'BREACHED!');
+      } else if (e.cat === 'model') {
+        loseLife('HYPE OVERLOAD', 'HYPE OVERLOAD!');
+      } else {
+        loseLife('DEPENDENCY HELL', 'DEPENDENCY HELL!');
+      }
+      if (state !== 'play') return;
+    }
+  }
+  eBullets = eBullets.filter(b => !b.dead);
+
+  // UFO (PTO stops showing up once they converge)
+  ufoT -= dt;
+  if (!ufo && ufoT <= 0) {
+    const pool = elapsed < T_CONVERGE ? UFO_TYPES : UFO_TYPES.filter(u => u.kind !== 'PTO');
+    const t = pick(pool), d = Math.random() < 0.5 ? 1 : -1;
+    ufo = { ...t, w: 72, h: 16, y: 36, dir: d, x: d > 0 ? -72 : W };
+  }
+  if (ufo) {
+    ufo.x += ufo.dir*75*dt;
+    if (ufo.x > W + 4 || ufo.x < -80) { ufo = null; ufoT = rand(16, 26); }
+  }
+
+  // Invasion check
+  for (const inv of invaders) {
+    if (inv.alive && inv.y + inv.h >= player.y - 2) { gameOver('THEY SHIPPED TO PROD'); return; }
+  }
+
+  // Wave clear (it does not help)
+  if (!invaders.some(i => i.alive)) {
+    score += 100;
+    floater('CLEARED. MORE ARE TRAINING.', W/2, H/2 + 40, '#ff8080', true);
+    tone(523, 0.12, 'square', 0.04); setTimeout(() => tone(494, 0.12, 'square', 0.04), 120);
+    setTimeout(() => tone(330, 0.4, 'square', 0.04), 240);
+    setupWave(wave + 1);
+  }
+}
+
+function hitUfo() {
+  const u = ufo; ufo = null; ufoT = rand(16, 26);
+  burst(u.x + u.w/2, u.y + 8, u.color, 22);
+  tone(660, 0.1, 'square', 0.04); setTimeout(() => tone(990, 0.15, 'square', 0.04), 90);
+  if (u.kind === 'COFFEE') { coffeeT = 8; score += 50; floater('RAPID FIRE! +50', u.x + u.w/2, u.y + 20, u.color, true); }
+  else if (u.kind === 'PTO') { fatigue = 0; score += 100; floater('RESTED! +100', u.x + u.w/2, u.y + 20, u.color, true); }
+  else { score += 300; floater('SERIES B! +300', u.x + u.w/2, u.y + 20, u.color, true); }
+}
+
+function march() {
+  const alive = invaders.filter(i => i.alive);
+  if (!alive.length) return;
+  let minX = Infinity, maxX = -Infinity;
+  for (const i of alive) { minX = Math.min(minX, i.x); maxX = Math.max(maxX, i.x + i.w); }
+  const dx = 6*dir;
+  if (maxX + dx > W - 6 || minX + dx < 6) { dir *= -1; fy += 14; }
+  else fx += dx;
+  layout();
+  animFrame ^= 1;
+  tone(MARCH[marchIdx++ % 4]*(elapsed > T_CONVERGE ? 0.75 : 1), 0.07, 'square', 0.035);
+  for (const i of alive) bunkerClear(i.x, i.y, i.w, i.h);
+}
+
+function enemyFire() {
+  const bottoms = {};
+  for (const i of invaders) if (i.alive && (!bottoms[i.col] || i.row > bottoms[i.col].row)) bottoms[i.col] = i;
+  const shooters = Object.values(bottoms);
+  if (!shooters.length) return;
+  const px = player.x + player.w/2;
+  let s = pick(shooters);
+  if (Math.random() < 0.35) s = shooters.reduce((a, b) => Math.abs(a.x + a.w/2 - px) < Math.abs(b.x + b.w/2 - px) ? a : b);
+  // once converged, the whole cluster fires through itself, models most of all
+  if (Math.random() < conv()*0.8) {
+    const alive = invaders.filter(i => i.alive);
+    const models = alive.filter(i => i.cat === 'model');
+    s = (models.length && Math.random() < 0.5) ? pick(models) : pick(alive);
+  }
+  const e = { x: s.x + s.w/2 + rand(-6, 6), y: s.y + s.h, cat: s.cat, t: 0, vx: 0 };
+  const aimP = clamp((elapsed - T_AIM)/60, 0, 0.65);
+  if (Math.random() < aimP) {
+    const sp = { model: 170, framework: 200, exploit: 270, burnout: 130 }[e.cat];
+    const tt = Math.max(0.3, (player.y - e.y)/sp);
+    e.vx = clamp((px - e.x)/tt, -160, 160);
+  }
+  eBullets.push(e);
+  const now = performance.now();
+  if (now - lastShotSound > 70) { lastShotSound = now; tone(160, 0.05, 'square', 0.012, 120); }
+}
+
+// ---------- Draw ----------
+function drawSprite(rows, x, y, color, px = PX) {
+  ctx.fillStyle = color;
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    for (let c = 0; c < row.length; c++) if (row[c] === 'X') ctx.fillRect(x + c*px, y + r*px, px, px);
+  }
+}
+function text(s, x, y, size, color, align = 'center', font = FONT) {
+  ctx.font = size ? size + 'px ' + font : font; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(s, x, y);
+}
+function wrapText(s, x, y, maxW, size, color, lh) {
+  ctx.font = size + 'px ' + FONT;
+  const words = s.split(' '); let line = '', yy = y;
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { text(line, x, yy, size, color); line = w; yy += lh; }
+    else line = test;
+  }
+  if (line) text(line, x, yy, size, color);
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+}
+
+function drawTitle(t) {
+  text('AGENTIC', W/2, 74, 24, '#ff5fdc');
+  text('INVADERS', W/2, 106, 24, '#7fff9f');
+  const pulse = 0.6 + 0.4*Math.sin(t*3);
+  ctx.globalAlpha = pulse;
+  text('YOU CANNOT WIN.', W/2, 134, 10, '#ff4040');
+  ctx.globalAlpha = 1;
+  text('you can only last.', W/2, 150, 8, '#a66');
+  const f = Math.floor(t*2) % 2;
+  ['model','framework','exploit','burnout'].forEach((k, i) => {
+    const c = CATS[k], y = 176 + i*54, spr = SPR[k][f];
+    drawSprite(spr, 64 - spr[0].length*PX/2, y, c.color);
+    if (k === 'model') { ctx.strokeStyle = 'rgba(190,240,255,' + (0.4 + 0.3*Math.sin(t*4)) + ')'; ctx.lineWidth = 1.5; rrect(64 - spr[0].length*PX/2 - 4, y - 4, spr[0].length*PX + 8, 32, 6); ctx.stroke(); }
+    text(c.name, 108, y + 10, 9, c.color, 'left');
+    text(c.pts + ' pts', 108, y + 24, 7, '#bbb', 'left');
+    text(c.effect, 108, y + 36, 7, '#777', 'left');
+  });
+  text('COFFEE / PTO / $FUNDING', W/2, 408, 8, '#ffe066');
+  text('fly by up top. Enjoy them while they last.', W/2, 424, 7, '#998');
+  if (Math.floor(t*2.2) % 2 === 0) text('TAP OR PRESS SPACE', W/2, 466, 11, '#ffffff');
+  text('← → move   SPACE fire   P pause', W/2, 494, 7, '#6a8');
+  text('HI ' + String(hi).padStart(5, '0') + '   LONGEST ' + fmtTime(best), W/2, 530, 8, '#7fff9f');
+}
+
+function drawHUD(t) {
+  text('SCORE ' + String(score).padStart(5, '0'), 8, 20, 9, '#7fff9f', 'left');
+  const late = elapsed > T_CONVERGE;
+  text(fmtTime(elapsed), W/2, 20, 9, late && Math.floor(t*4) % 2 ? '#ff4040' : '#bfe');
+  text('W' + wave, W - 8, 20, 9, '#7fff9f', 'right');
+  // threat bar
+  const threat = clamp(elapsed/170, 0, 1);
+  ctx.fillStyle = '#220808'; ctx.fillRect(8, 26, W - 16, 3);
+  ctx.fillStyle = threat < 0.33 ? '#a86' : threat < 0.66 ? '#e64' : '#ff2020';
+  ctx.fillRect(8, 26, (W - 16)*threat, 3);
+  // ground
+  ctx.fillStyle = '#2d6'; ctx.fillRect(0, GROUND_Y, W, 2);
+  // lives
+  for (let i = 0; i < Math.max(0, lives - 1); i++) drawSprite(PLAYER, 8 + i*30, GROUND_Y + 8, '#7fff9f', 2);
+  // fatigue
+  text('FATIGUE', W - 118, GROUND_Y + 20, 7, '#ffb84f', 'right');
+  ctx.strokeStyle = '#ffb84f'; ctx.lineWidth = 1; ctx.strokeRect(W - 112.5, GROUND_Y + 11.5, 104, 10);
+  ctx.fillStyle = fatigue > 0.66 ? '#ff5a4f' : '#ffb84f'; ctx.fillRect(W - 110, GROUND_Y + 14, 99*fatigue, 5);
+  if (coffeeT > 0) text('COFFEE ' + Math.ceil(coffeeT), W/2 + 6, GROUND_Y + 20, 7, '#d39a5c');
+}
+
+function drawEnemyBullet(e) {
+  const col = CATS[e.cat].color;
+  ctx.fillStyle = col;
+  if (e.cat === 'model') {
+    const o = Math.floor(e.t*20) % 2 ? 2 : -2;
+    ctx.fillRect(e.x - 1 + o, e.y, 3, 3); ctx.fillRect(e.x - 1 - o, e.y + 3, 3, 3); ctx.fillRect(e.x - 1 + o, e.y + 6, 3, 3);
+  } else if (e.cat === 'framework') {
+    ctx.fillRect(e.x - 1, e.y, 3, 10);
+    ctx.fillRect(e.x - 3, e.y + (Math.floor(e.t*16) % 2 ? 2 : 6), 7, 2);
+  } else if (e.cat === 'exploit') {
+    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x + 4, e.y + 5); ctx.lineTo(e.x, e.y + 11); ctx.lineTo(e.x - 4, e.y + 5); ctx.closePath(); ctx.fill();
+  } else {
+    text('z', e.x, e.y + 10, 9, col);
+  }
+}
+
+function draw(t) {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  if (shake > 0) ctx.translate(rand(-3, 3)*shake*3, rand(-3, 3)*shake*3);
+  const dread = state === 'title' ? 0 : clamp((elapsed - T_SHIELD)/150, 0, 1);
+  for (const s of stars) {
+    const g = Math.round(255 - 200*dread), b = Math.round(220 - 180*dread);
+    ctx.fillStyle = 'rgba(' + (180 + Math.round(75*dread)) + ',' + g + ',' + b + ',' + (0.15 + s.s*0.4) + ')';
+    ctx.fillRect(s.x, s.y, s.s > 0.7 ? 2 : 1, s.s > 0.7 ? 2 : 1);
+  }
+  if (dread > 0) {
+    ctx.fillStyle = 'rgba(110,0,8,' + (dread*0.22 + (elapsed > T_CONVERGE ? 0.05*Math.sin(t*(2 + 6*dread)) + 0.05 : 0)) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (state === 'title') { drawTitle(t); ctx.restore(); return; }
+
+  drawHUD(t);
+
+  // bunkers
+  bunkers.forEach((b, bi) => {
+    ctx.fillStyle = '#3fdc6f';
+    for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) if (b.g[r][c]) ctx.fillRect(b.x + c*PX, b.y + r*PX, PX, PX);
+    text(BUNKER_NAMES[bi], b.x + b.cols*PX/2, b.y + b.rows*PX + 13, 7, '#3fae66');
+  });
+
+  // invaders
+  const c = conv();
+  const labelA = clamp(0.9*(1 - c*1.6), 0, 0.9);
+  let gx0 = Infinity, gx1 = -Infinity, gy0 = Infinity;
+  for (const i of invaders) {
+    if (!i.alive) continue;
+    gx0 = Math.min(gx0, i.x); gx1 = Math.max(gx1, i.x + i.w); gy0 = Math.min(gy0, i.y);
+    const cat = CATS[i.cat];
+    const jitter = c > 0.5 ? rand(-1, 1)*c : 0;
+    drawSprite(SPR[i.cat][animFrame], i.x + jitter, i.y, i.flash > 0 ? '#ffffff' : cat.color);
+    if (i.shield > 0) {
+      const a = Math.min(0.95, 0.3 + 0.12*i.shield + (i.flash > 0 ? 0.4 : 0));
+      ctx.strokeStyle = 'rgba(190,240,255,' + a + ')';
+      ctx.lineWidth = 1 + Math.min(2.5, i.shield*0.4);
+      rrect(i.x - 4, i.y - 4, i.w + 8, i.h + 8, 6); ctx.stroke();
+      ctx.fillStyle = 'rgba(190,240,255,' + (0.06 + 0.03*i.shield) + ')'; ctx.fill();
+    }
+    if (labelA > 0.02) {
+      ctx.globalAlpha = labelA;
+      text(i.label, i.x + i.w/2, i.y + 35, '', cat.color, 'center', MONO);
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (c > 0.4 && gx0 < Infinity) {
+    ctx.globalAlpha = clamp((c - 0.4)*2, 0, 1)*(0.6 + 0.4*Math.sin(t*5));
+    text(elapsed < 130 ? 'CONSENSUS REACHED' : 'WE ARE ONE MODEL NOW', (gx0 + gx1)/2, Math.max(66, gy0 - 10), 8, '#ff4040');
+    ctx.globalAlpha = 1;
+  }
+
+  // ufo
+  if (ufo) {
+    ctx.fillStyle = ufo.color;
+    rrect(ufo.x, ufo.y, ufo.w, ufo.h, 8); ctx.fill();
+    text(ufo.text, ufo.x + ufo.w/2, ufo.y + 12, 7, '#000');
+  }
+
+  // player
+  if (state !== 'over' && (invulnT <= 0 || Math.floor(t*12) % 2 === 0)) {
+    const pc = fatigue > 0.66 ? '#c8d86f' : '#7fff9f';
+    drawSprite(PLAYER, player.x, player.y, pc);
+    if (fatigue > 0.3) text('z', player.x + player.w + 4 + Math.sin(t*3)*2, player.y - 2 - (t*10 % 8), 8, '#ffb84f');
+  }
+
+  // bullets
+  ctx.fillStyle = '#ffffff';
+  for (const b of pBullets) ctx.fillRect(b.x, b.y, 2, 8);
+  for (const e of eBullets) drawEnemyBullet(e);
+
+  // particles
+  for (const p of particles) { ctx.globalAlpha = clamp(p.t*2, 0, 1); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 2, 2); }
+  ctx.globalAlpha = 1;
+
+  // floaters
+  for (const f of floaters) {
+    ctx.globalAlpha = clamp(f.t, 0, 1);
+    const size = f.big ? 10 : 7;
+    ctx.font = size + 'px ' + FONT;
+    const wdt = ctx.measureText(f.text).width;
+    const x = clamp(f.x, wdt/2 + 4, W - wdt/2 - 4);
+    text(f.text, x, f.y, size, f.color);
+  }
+  ctx.globalAlpha = 1;
+
+  // escalation banner
+  if (banner && state !== 'over') {
+    const a = clamp(banner.t, 0, 1);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(40,0,0,0.75)'; ctx.fillRect(0, 404, W, banner.sub ? 46 : 32);
+    ctx.fillStyle = '#ff2020'; ctx.fillRect(0, 404, W, 1); ctx.fillRect(0, 404 + (banner.sub ? 46 : 32), W, 1);
+    wrapText(banner.title, W/2, 424, 380, 10, Math.floor(t*6) % 2 ? '#ff4040' : '#ffffff', 14);
+    if (banner.sub) text(banner.sub, W/2, 442, 7, '#f99');
+    ctx.globalAlpha = 1;
+  }
+
+  // overlays
+  if (state === 'wave') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, H/2 - 60, W, 100);
+    text('WAVE ' + wave, W/2, H/2 - 22, 18, '#ff5fdc');
+    wrapText(WAVE_MSG[Math.min(wave, WAVE_MSG.length) - 1], W/2, H/2 + 10, 340, 9, '#ffffff', 16);
+  }
+  if (state === 'paused') {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, W, H);
+    text('PAUSED', W/2, H/2 - 10, 20, '#7fff9f');
+    text(elapsed > T_CONVERGE ? 'They are not pausing.' : 'Taking a breather. Good call.', W/2, H/2 + 18, 8, '#ccc');
+    text('Tap or press P to resume', W/2, H/2 + 40, 7, '#888');
+  }
+  if (state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0, 0, W, H);
+    text('GAME OVER', W/2, 170, 22, '#ff5a4f');
+    wrapText(overReason, W/2, 206, 360, 11, '#ffb84f', 18);
+    text('YOU LASTED ' + fmtTime(elapsed), W/2, 258, 12, '#ffffff');
+    text('SCORE ' + score + '   WAVE ' + wave, W/2, 282, 8, '#7fff9f');
+    text('HI ' + hi + '   LONGEST ' + fmtTime(best), W/2, 300, 8, '#7fff9f');
+    text('There was never a win condition.', W/2, 338, 8, '#ff6060');
+    wrapText('Tip: ' + overTip, W/2, 380, 330, 8, '#bfe', 16);
+    if (overT <= 0 && Math.floor(t*2.2) % 2 === 0) text('TAP OR PRESS SPACE', W/2, 470, 11, '#ffffff');
+  }
+  ctx.restore();
+}
+
+// ---------- Loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last)/1000); last = now;
+  update(dt);
+  draw(now/1000);
+  requestAnimationFrame(frame);
+}
+
+// ---------- Layout ----------
+function resize() {
+  const ctrlH = controls.classList.contains('show') ? controls.offsetHeight : 0;
+  const availW = window.innerWidth - 8, availH = window.innerHeight - ctrlH - bar.offsetHeight - 8;
+  const s = Math.max(0.3, Math.min(availW/W, availH/H));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.style.width = Math.floor(W*s) + 'px'; cv.style.height = Math.floor(H*s) + 'px';
+  bar.style.width = Math.floor(W*s) + 'px';
+  cv.width = Math.round(W*s*dpr); cv.height = Math.round(H*s*dpr);
+  ctx.setTransform(s*dpr, 0, 0, s*dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
+function showTouch() { if (!controls.classList.contains('show')) { controls.classList.add('show'); resize(); } }
+if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) || 'ontouchstart' in window) controls.classList.add('show');
+window.addEventListener('resize', resize);
+
+// ---------- Input ----------
+function tapStart() {
+  audio();
+  if (state === 'title' || (state === 'over' && overT <= 0)) { startGame(); return true; }
+  if (state === 'paused') { state = prevState; return true; }
+  return false;
+}
+function togglePause() {
+  if (state === 'play' || state === 'wave') { prevState = state; state = 'paused'; }
+  else if (state === 'paused') state = prevState;
+}
+const KEYS = { ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right', ' ': 'fire', ArrowUp: 'fire', w: 'fire', W: 'fire' };
+window.addEventListener('keydown', e => {
+  audio();
+  if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') { togglePause(); return; }
+  if (e.key === 'm' || e.key === 'M') { toggleMute(); return; }
+  if ((e.key === ' ' || e.key === 'Enter') && tapStart()) { e.preventDefault(); return; }
+  const k = KEYS[e.key];
+  if (k) { input[k] = true; e.preventDefault(); }
+});
+window.addEventListener('keyup', e => { const k = KEYS[e.key]; if (k) input[k] = false; });
+window.addEventListener('blur', () => { input.left = input.right = input.fire = false; });
+document.addEventListener('visibilitychange', () => { if (document.hidden && (state === 'play' || state === 'wave')) togglePause(); });
+
+function bindBtn(id, key) {
+  const el = document.getElementById(id);
+  const on = e => { e.preventDefault(); audio(); if (key === 'fire') tapStart(); input[key] = true; el.classList.add('on'); try { el.setPointerCapture(e.pointerId); } catch (_) {} };
+  const off = e => { e.preventDefault(); input[key] = false; el.classList.remove('on'); };
+  el.addEventListener('pointerdown', on);
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointercancel', off);
+  el.addEventListener('lostpointercapture', off);
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+bindBtn('bL', 'left'); bindBtn('bR', 'right'); bindBtn('bF', 'fire');
+cv.addEventListener('pointerdown', e => { if (e.pointerType === 'touch') showTouch(); tapStart(); });
+
+const muteBtn = document.getElementById('muteBtn');
+function toggleMute() { muted = !muted; muteBtn.textContent = muted ? 'SOUND OFF' : 'SOUND ON'; }
+muteBtn.addEventListener('click', () => { audio(); toggleMute(); });
+document.getElementById('pauseBtn').addEventListener('click', () => { if (state === 'title' || state === 'over') return; togglePause(); });
+
+resize();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(resize).catch(() => {});
+requestAnimationFrame(frame);
+
+// test hook
+window.__ai = { get state() { return state; }, startGame, update, draw, input,
+  get score() { return score; }, get wave() { return wave; }, get lives() { return lives; },
+  get elapsed() { return elapsed; }, set lives(v) { lives = v; }, setElapsed(v) { elapsed = v; bannerIdx = BANNERS.findIndex(b => b.at > v); if (bannerIdx < 0) bannerIdx = BANNERS.length; } };
+})();
+</script>
+</body>
+</html>
