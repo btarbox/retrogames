@@ -42,11 +42,17 @@ h1{font:400 40px/1 VT323,monospace;margin:0;letter-spacing:.02em}
 .key:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 .key.sm{min-height:36px;min-width:40px;font-size:18px}
 .pad .key{font-size:20px;padding:0}
+.forces{grid-column:1/-1;width:100%;table-layout:fixed;font-size:14px;background:var(--key);border-radius:10px;box-shadow:0 3px 0 var(--keysh);overflow:hidden}
+.forces th,.forces td{padding:3px 2px;text-align:center;border-bottom:1px solid var(--keysh)}
+.forces tr:last-child td,.forces tr:last-child th{border-bottom:0}
+.forces th[scope=row]{text-align:left;padding-left:10px;font-weight:600;width:88px}
+.forces thead th{font:400 22px/1 VT323,monospace}
+.forces td.z{color:var(--mut);opacity:.6}
 .key.go{background:var(--acc);color:#fff;box-shadow:0 3px 0 #9c3611}
 .key.ready{animation:pulse 1.1s ease-in-out infinite}
 @keyframes pulse{50%{box-shadow:0 3px 0 #9c3611,0 0 0 5px rgba(223,90,42,.35)}}
 @media (prefers-reduced-motion:reduce){.key.ready{animation:none;outline:3px solid var(--acc)}}
-@media (min-width:900px){.main{flex-direction:row}.screen{margin:0 0 12px 12px}.deck{grid-template-columns:1fr;width:340px;align-content:start}.pad{order:2;justify-self:center}}
+@media (min-width:900px){.main{flex-direction:row}.screen{margin:0 0 12px 12px}.deck{grid-template-columns:1fr;width:340px;align-content:start}.pad{order:2;justify-self:center}.forces{order:3}}
 #modal{position:fixed;inset:0;background:rgba(10,8,6,.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:5}
 #modal.on{display:flex}
 .card{background:var(--card);color:var(--ink);border-radius:16px;max-width:560px;width:100%;max-height:90dvh;overflow:auto;padding:22px;box-shadow:0 20px 50px rgba(0,0,0,.4)}
@@ -97,12 +103,58 @@ td.n,th.n{text-align:right}
         <button class="key go" id="bEnd">End turn</button>
       </div>
     </div>
+    <table class="forces" id="forces" aria-label="Your forces"></table>
   </div>
 </div>
 <div id="modal"><div class="card" id="card"></div></div>
 <script>
 {
+//
+// ================================================================
+// EMPIRE: a browser tribute to Walter Bright's 1977 wargame.
+//
+// HOW THE CODE IS ORGANISED
+//   Constants and lookup tables, then these sections in order:
+//   map generation, helpers, game rules, computer opponent (AI),
+//   player input, save/load, rendering, dialogs, event wiring.
+//
+// COORDINATES
+//   The world is a W x H grid. Every square is stored as one integer
+//   index p = y*W + x. I(), X() and Y() convert between the two forms.
+//   Movement is 8-directional, so distance is Chebyshev distance
+//   (the larger of |dx| and |dy|), computed by cheb().
+//
+// THE GAME STATE: one object, G, which is also what gets saved
+//   G.turn    current turn number
+//   G.terr    per square: 1 = land, 0 = water
+//   G.cont    per square: continent id for land (-1 for water)
+//   G.cities  list of {p: square, o: owner, prod: unit type being
+//             built, prog: turns of progress}. Owner is 'p' (player),
+//             'e' (enemy AI) or null (neutral).
+//   G.cg      per square: index into G.cities, or -1 if no city
+//   G.units   list of units (fields described at mk() below)
+//   G.nid     next unit id to hand out
+//   G.known   per square: 1 once the player has ever seen it
+//   G.seen    per city: owner as last seen by the player ('n' = neutral),
+//             used to draw remembered cities under fog of war
+//   G.msgs    message log, newest first
+//   G.over    null while playing, then 'win' or 'lose'
+//   G.sel     id of the player's selected unit, or null
+// ================================================================
+//
+// Map size in squares, and total number of squares.
 const W=60,H=40,N=W*H;
+//
+// Unit table. One entry per unit letter, using the classic Empire values.
+//   spd   squares moved per turn
+//   hits  hit points when new
+//   str   damage dealt per winning combat round
+//   build turns a city needs to produce one
+//   dom   domain: 'land' units stay on land, 'sea' units on water,
+//         'air' units fly anywhere
+//   fuel  fighters only: squares they can fly before crashing
+//   cap / carries   ships that carry other units, and which type
+//   note  short description shown in the help and city dialogs
 const UT={
  A:{name:'Army',spd:1,hits:1,str:1,build:5,dom:'land',note:'Captures cities'},
  F:{name:'Fighter',spd:8,hits:1,str:1,build:10,dom:'air',fuel:32,note:'32 fuel, refuels in cities and carriers'},
@@ -112,21 +164,66 @@ const UT={
  T:{name:'Transport',spd:2,hits:1,str:1,build:30,dom:'sea',cap:6,carries:'A',note:'Carries 6 armies'},
  C:{name:'Carrier',spd:2,hits:8,str:1,build:30,dom:'sea',cap:8,carries:'F',note:'Carries 8 fighters'},
  B:{name:'Battleship',spd:2,hits:10,str:2,build:40,dom:'sea',note:'Strikes for 2'}};
+// Unit letters in display order (help table, city dialog, forces table).
 const TYPES='AFPDSTCB';
+// The 8 neighbour offsets [dx,dy], used to precompute neighbours.
 const DIRS=[[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+// Keyboard movement keys, laid out like the original Empire: Q W E / A D / Z X C.
 const KEYS={q:[-1,-1],w:[0,-1],e:[1,-1],a:[-1,0],d:[1,0],z:[-1,1],x:[0,1],c:[1,1]};
+// Map colours: unknown, sea (lit and fogged), land (lit and fogged), then
+// owner colours for player, enemy and neutral.
 const COL={unk:'#090807',sea:'#2163a3',seaF:'#173e66',land:'#5f9440',landF:'#3b5e2b',p:'#5cc8ff',e:'#ff5d4c',n:'#ddd3bc'};
+// Short DOM lookup.
 const $=id=>document.getElementById(id);
+// Index helpers: I(x,y) gives the square index, X/Y recover the column/row,
+// inB checks that a coordinate is on the map.
 const I=(x,y)=>y*W+x,X=i=>i%W,Y=i=>(i/W)|0,inB=(x,y)=>x>=0&&y>=0&&x<W&&y<H;
+// Random integer from 0 to n-1.
 const rnd=n=>Math.floor(Math.random()*n);
+// NB[p] is the precomputed list of on-map neighbours of square p.
+// Built once so path searches don't recompute it millions of times.
 const NB=[];for(let i=0;i<N;i++){const r=[];for(const[dx,dy]of DIRS){const a=X(i)+dx,b=Y(i)+dy;if(inB(a,b))r.push(I(a,b));}NB.push(r);}
+// Chebyshev distance between two squares: the number of 8-way moves needed
+// with no obstacles. Used for fighter range and simple distance checks.
 const cheb=(a,b)=>Math.max(Math.abs(X(a)-X(b)),Math.abs(Y(a)-Y(b)));
+// Mutable globals that are not saved:
+//   vis    per square: 1 if the player can see it right now
+//   OCC    cache of which unit occupies each square (see occ())
+//   mode   'goto' while waiting for the player to tap a destination
+//   blink  toggles the selected-unit highlight
+//   ts     tile size in pixels (the zoom level); larger default on phones
 let G=null,vis=new Array(N).fill(0),OCC=null,mode=null,blink=true,ts=innerWidth<600?22:18;
 
 /* ---------- map ---------- */
+//
+// noise(cell): smooth random "value noise". A coarse grid of random
+// values, one per cell x cell block, is interpolated with a smoothstep
+// curve so neighbouring squares get similar values. Returns a function
+// (x,y) => value in roughly 0..1. Several of these at different cell
+// sizes are blended to make natural looking coastlines.
 function noise(cell){const gw=Math.ceil(W/cell)+2,g=[];for(let i=0;i<gw*(Math.ceil(H/cell)+2);i++)g.push(Math.random());
  const s=t=>t*t*(3-2*t);
  return(x,y)=>{const fx=x/cell,fy=y/cell,x0=fx|0,y0=fy|0,u=s(fx-x0),v=s(fy-y0),a=g[y0*gw+x0],b=g[y0*gw+x0+1],c=g[(y0+1)*gw+x0],d=g[(y0+1)*gw+x0+1];return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;};}
+//
+// genMap(): builds a random world and picks the two starting cities.
+// Tries up to 400 times until it finds a world that meets the rules.
+//   1. Height: blend three noise layers (big continents, medium
+//      bays, small ragged detail) and push the 3 squares nearest
+//      the edge downward so the map is ringed by ocean.
+//   2. Sea level: sort all heights and set the threshold so the
+//      top 36% of squares are land.
+//   3. Continents: flood fill each connected block of land
+//      (8-way) and give it an id. The AI uses these ids to know
+//      whether there is anything left to conquer on its island.
+//   4. Cities: shuffle the land squares and place a city on each
+//      one that has no other city within 2 squares, until there is
+//      roughly one city per 20 land squares.
+//   5. Starts: only continents with at least 4 cities qualify.
+//      Among cities on two different qualifying continents, both
+//      on the coast (so both sides can build ships), pick the pair
+//      farthest apart. Accept it if they are at least 28 squares
+//      apart, relaxing to 12 after 200 failed tries. A coin flip
+//      decides which of the pair the player gets.
 function genMap(){
  for(let t=0;t<400;t++){
   const n1=noise(9),n2=noise(4),n3=noise(2),v=[];
@@ -152,22 +249,64 @@ function genMap(){
 }
 
 /* ---------- helpers ---------- */
+//
+// dirty(): throw away the occupancy cache. Called whenever a unit is
+// created, destroyed or moved.
 const dirty=()=>{OCC=null;};
+// occ(p): the first unit standing on square p that is not riding inside
+// a ship, or null. The whole grid is rebuilt lazily after dirty(), which
+// keeps the AI's path searches fast. In a city several units may share
+// a square; occ() only reports one, which is enough for "is it free".
 function occ(p){if(!OCC){OCC=new Array(N).fill(null);for(const u of G.units)if(u.cr===null&&!OCC[u.p])OCC[u.p]=u;}return OCC[p];}
+// All units on square p, including cargo aboard ships.
 const at=p=>G.units.filter(u=>u.p===p);
+// Look up a unit by id.
 const byId=id=>G.units.find(u=>u.id===id);
+// True if the unit still exists (has not been killed).
 const alive=u=>G.units.includes(u);
+// The city on square p, or null.
 const cityAt=p=>G.cg[p]>=0?G.cities[G.cg[p]]:null;
+// Units riding aboard ship u (their cr field holds the ship's id).
 const cargo=u=>G.units.filter(v=>v.cr===u.id);
+// True if square p touches water, so a city there can build ships.
 const coastal=p=>NB[p].some(n=>!G.terr[n]);
+// True if ship s carries units of type t and has a free slot.
 const hasRoom=(s,t)=>UT[s.t].carries===t&&cargo(s).length<UT[s.t].cap;
+// True if the unit is aboard a ship or inside one of its own cities.
+// Fighters that are "safe" refuel and do not burn fuel while idle.
 const safe=u=>u.cr!==null||(cityAt(u.p)&&cityAt(u.p).o===u.o);
+// Message helpers: 'your army' / 'enemy destroyer', capitalise, '(x,y)'.
 const nm=u=>(u.o==='p'?'your ':'enemy ')+UT[u.t].name.toLowerCase();
 const cap=s=>s[0].toUpperCase()+s.slice(1);
 const xy=p=>`(${X(p)},${Y(p)})`;
+// log(m): add a message to the top of the log, keeping the newest 30.
 function log(m){G.msgs.unshift(m);G.msgs.length=Math.min(G.msgs.length,30);}
+// mk(type, owner, square): create a unit. Unit fields:
+//   id    unique number
+//   t     type letter, o owner ('p' or 'e'), p square
+//   hp    current hit points
+//   mv    moves left this turn (filled in by beginTurn)
+//   fuel  fighters only
+//   cr    id of the ship carrying it, or null
+//   go    destination square for multi-turn "go to" orders, or null
+//   sn    sentry: the player is not asked for orders until woken
+//   sk    skipped for the rest of this turn
 function mk(t,o,p){const u={id:G.nid++,t,o,p,hp:UT[t].hits,mv:0,fuel:UT[t].fuel||0,cr:null,go:null,sn:false,sk:false};G.units.push(u);dirty();return u;}
+// kill(u): remove a unit. Anything aboard it dies too (a sunk transport
+// drowns its armies). Clears the selection if it was selected.
 function kill(u){for(const v of cargo(u))kill(v);G.units=G.units.filter(v=>v!==u);if(G.sel===u.id)G.sel=null;dirty();}
+//
+// bfs(start, pass, goal, maxD): breadth-first path search over the
+// 8-way grid, used by every unit that moves toward something.
+//   pass(p)  may the unit travel THROUGH square p?
+//   goal(p)  is p a square we are looking for?
+//   maxD     optional search radius, in steps
+// A goal square is accepted even if it is not passable, which is how
+// units path toward an enemy or a city they mean to attack.
+// Returns {s: first step to take, g: goal found, d: distance}, or null
+// when nothing reachable matches. Because it is breadth first, the
+// goal found is always the nearest one, and callers only ever take
+// the first step and search again next move (so they react to changes).
 function bfs(s,pass,goal,maxD=999){
  const prev=new Int32Array(N).fill(-1),dist=new Int16Array(N);prev[s]=s;const q=[s];
  for(let h=0;h<q.length;h++){const c=q[h];if(dist[c]>=maxD)continue;
@@ -178,6 +317,17 @@ function bfs(s,pass,goal,maxD=999){
 }
 
 /* ---------- rules ---------- */
+//
+// action(u, p): what would happen if unit u moved into neighbouring
+// square p? Returns null when the move is illegal, otherwise:
+//   'capture'  an army entering a city it does not own
+//   'move'     entering an own city (any unit type), empty land for
+//              armies, empty water for ships, anywhere for fighters
+//   'attack'   an enemy unit is there and u can reach that terrain
+//              (armies attack on land, ships on water, fighters anywhere)
+//   'board'    a friendly ship with room for this unit type is there
+// Non-army units cannot enter or attack enemy cities at all. Only one
+// unit may stand on an ordinary square, unless it boards a ship.
 function action(u,p){
  if(cheb(u.p,p)!==1)return null;
  const c=cityAt(p),land=G.terr[p]===1,dom=UT[u.t].dom;
@@ -190,12 +340,39 @@ function action(u,p){
  if(dom==='sea')return land?null:'move';
  return 'move';
 }
+//
+// fight(attacker, defender): resolve a battle to the death and remove
+// the loser. Returns true if the attacker won.
+// Special case: fighter versus submarine does not trade blows. The
+// fighter simply wins 80% of the time, whichever side attacked.
+// Everything else uses the classic rule: each round is a coin flip;
+// the winner of the round deals damage equal to its str to the other.
+// Repeat until one side reaches 0 hits. So a battleship (10 hits,
+// str 2) nearly always beats a destroyer (3 hits, str 1), while two
+// equal units are a 50/50. Only battles involving the player are logged.
 function fight(a,d){
- while(a.hp>0&&d.hp>0){if(Math.random()<.5)d.hp-=UT[a.t].str;else a.hp-=UT[d.t].str;}
- const won=a.hp>0;
+ let won;
+ if((a.t==='F'&&d.t==='S')||(a.t==='S'&&d.t==='F'))won=(Math.random()<.8)===(a.t==='F');
+ else{while(a.hp>0&&d.hp>0){if(Math.random()<.5)d.hp-=UT[a.t].str;else a.hp-=UT[d.t].str;}won=a.hp>0;}
  if(a.o==='p'||d.o==='p')log(won?`${cap(nm(a))} destroyed ${nm(d)}.`:`${cap(nm(a))} was destroyed by ${nm(d)}.`);
  kill(won?d:a);return won;
 }
+//
+// doStep(u, p): carry out one move by unit u into neighbouring square p.
+// Spends one move point (and one fuel for fighters), then:
+//   attack   fight the non-cargo enemy unit on p
+//   capture  the army is always used up. 50% chance the city falls:
+//            every unit of the old owner inside is destroyed, its
+//            progress resets, and it starts building. A city the player
+//            captures builds armies; one the AI captures gets its build
+//            chosen by aiProd() (see below).
+//   move / board
+//            move the unit, attach it to the ship if boarding (player
+//            units that board go on sentry), and carry along anything
+//            this unit is itself carrying. Fighters that land in an own
+//            city or on a carrier refuel to full.
+// Finally, a fighter that has hit 0 fuel away from safety crashes.
+// Returns the action taken, or null if the move was illegal.
 function doStep(u,p){
  const a=action(u,p);if(!a)return null;
  u.mv--;if(u.t==='F')u.fuel--;
@@ -219,6 +396,15 @@ function doStep(u,p){
  if(alive(u)&&u.t==='F'&&u.fuel<=0&&!safe(u)){if(u.o==='p')log('Your fighter ran out of fuel and crashed.');kill(u);}
  return a;
 }
+//
+// beginTurn(owner): start-of-turn housekeeping for one side.
+//   Production: every city adds one turn of progress. When progress
+//   reaches the build time of its unit type, the unit appears in the
+//   city with full moves, and progress resets to 0. AI cities then
+//   pick their next build with aiProd() (player cities keep building
+//   the same thing until the player changes it).
+//   Units: refill move points, clear "skip", repair damaged ships
+//   sitting in a city by 1 hit, and refuel fighters that are safe.
 function beginTurn(o){
  for(const c of G.cities)if(c.o===o){
   if(++c.prog>=UT[c.prod].build){mk(c.prod,o,c.p);c.prog=0;if(o==='e')c.prod=aiProd(c);}}
@@ -226,14 +412,23 @@ function beginTurn(o){
   if(UT[u.t].dom==='sea'&&cityAt(u.p)&&u.hp<UT[u.t].hits)u.hp++;
   if(u.t==='F'&&safe(u))u.fuel=UT.F.fuel;}
 }
+// burnFuel(owner): end-of-turn fuel rule. A fighter left airborne burns
+// the moves it did not use, so it cannot hover forever. Any that run
+// dry crash.
 function burnFuel(o){for(const u of [...G.units])if(u.o===o&&u.t==='F'&&!safe(u)){u.fuel-=u.mv;u.mv=0;
  if(u.fuel<=0){if(o==='p')log('Your fighter ran out of fuel and crashed.');kill(u);}}}
+// updateVis(): fog of war. The player sees every square within one step
+// of their units and cities. Seen squares become permanently "known",
+// and each visible city's current owner is remembered in G.seen.
 function updateVis(){
  vis=new Array(N).fill(0);const mark=p=>{vis[p]=1;for(const n of NB[p])vis[n]=1;};
  for(const u of G.units)if(u.o==='p')mark(u.p);for(const c of G.cities)if(c.o==='p')mark(c.p);
  for(let i=0;i<N;i++)if(vis[i])G.known[i]=1;
  G.cities.forEach((c,k)=>{if(vis[c.p])G.seen[k]=c.o||'n';});
 }
+// checkOver(): a side is still in the game while it owns a city or has
+// at least one army (an army could still retake a city). Ships and
+// fighters alone don't count. Shows the victory or defeat dialog.
 function checkOver(){
  if(G.over)return;
  const has=(o)=>G.cities.some(c=>c.o===o)||G.units.some(u=>u.o===o&&u.t==='A');
@@ -241,16 +436,59 @@ function checkOver(){
 }
 
 /* ---------- AI ---------- */
+//
+// targets(): the set of continent ids that still contain a city the AI
+// does not own. "Is my continent in this set?" is the AI's main question:
+// if yes there is land fighting to do; if no, armies must ship out.
 const targets=()=>new Set(G.cities.filter(c=>c.o!=='e').map(c=>G.cont[c.p]));
+// freeLand(p): a land square with no city and nobody standing on it.
 const freeLand=p=>G.terr[p]&&!cityAt(p)&&!occ(p);
+// passFor(owner, domain): builds a pass() test for bfs(). Own cities are
+// always passable (they work as canals for ships); other cities and
+// occupied squares are not; otherwise land units need land, sea units
+// need water, and fighters may cross anything.
 function passFor(o,dom){return p=>{const c=cityAt(p);if(c)return c.o===o;if(occ(p))return false;return dom==='air'||(dom==='land'?G.terr[p]===1:G.terr[p]===0);};}
+// pick(weights): weighted random choice, e.g. pick({A:60,F:40}) returns
+// 'A' 60% of the time and 'F' 40% of the time.
 function pick(w){let s=0;for(const k in w)s+=w[k];let r=Math.random()*s;for(const k in w){r-=w[k];if(r<0)return k;}return 'A';}
+//
+// aiProd(city): how the AI decides what a city should build. Called
+// when the AI captures a city and every time one of its cities
+// finishes a unit. (Its starting city simply begins on armies.)
+//   1. If the city's continent still has cities the AI does not own,
+//      the job is local conquest: build an army (85%) or a fighter
+//      (15%) to support it.
+//   2. Otherwise the continent is secure and the war must go overseas.
+//      If the city is on the coast:
+//        a. Transports first: if the AI has fewer than one transport
+//           (built or being built elsewhere) per 3 cities it owns,
+//           with a minimum of 1, build a transport.
+//        b. If not, pick a mix: army 30%, destroyer 20%, fighter 15%,
+//           patrol boat 13%, submarine 12%, battleship 10%.
+//           It never builds carriers.
+//   3. Inland cities, which can't launch ships, build armies (60%)
+//      or fighters (40%).
 function aiProd(c){
  if(targets().has(G.cont[c.p]))return Math.random()<.85?'A':'F';
  const mine=G.cities.filter(x=>x.o==='e').length,nT=G.units.filter(u=>u.o==='e'&&u.t==='T').length+G.cities.filter(x=>x.o==='e'&&x.prod==='T'&&x!==c).length;
  if(coastal(c.p)){if(nT<Math.max(1,Math.ceil(mine/3)))return 'T';return pick({A:30,F:15,D:20,S:12,B:10,P:13});}
  return pick({A:60,F:40});
 }
+//
+// aiArmy(u): orders for one AI army, re-evaluated before every step.
+// The loop limit (6) only guards against getting stuck. Priorities:
+//   1. A city it does not own is next door: attack it. Win or lose,
+//      the army is used up, so stop.
+//   2. A player unit stands on neighbouring land: attack it.
+//   3. If riding a transport: step ashore onto any free land square
+//      of a continent that still has targets. Otherwise stay aboard.
+//   4. If its own continent still has targets: path over land to the
+//      nearest non-AI city or player land unit and take one step.
+//   5. Its continent is conquered, so it needs a ride: board an
+//      adjacent AI transport with room at sea, or one sitting in the
+//      same city.
+//   6. Otherwise walk to the nearest free coastal square and wait
+//      there for a transport to pick it up.
 function aiArmy(u){
  for(let g=0;g<6&&alive(u)&&u.mv>0;g++){
   const ns=NB[u.p],tg=targets();
@@ -270,6 +508,20 @@ function aiArmy(u){
   return;
  }
 }
+//
+// aiTransport(u): orders for one AI troop transport.
+// "Waiting" armies are AI armies on land, not aboard, on continents
+// with nothing left to conquer. Their squares are collected first.
+// The transport counts how many turns it has sat with cargo (u.w).
+//   DELIVER when it is full (6 armies), or has some cargo and has
+//   either waited 3 turns or there is nobody left waiting:
+//     if it is already next to free land on a continent with targets,
+//     stop so the armies can step ashore (armies move after ships);
+//     otherwise sail toward the nearest such water square.
+//   COLLECT otherwise:
+//     if a waiting army is next to it (or in the same city), sit still
+//     and let it board; otherwise sail toward the nearest water square
+//     or own city beside a waiting army.
 function aiTransport(u){
  const tg=targets(),wait=new Set();
  for(const v of G.units)if(v.o==='e'&&v.t==='A'&&v.cr===null&&!tg.has(G.cont[v.p]))wait.add(v.p);
@@ -287,6 +539,14 @@ function aiTransport(u){
   if(r){doStep(u,r.s);continue;}u.w=(u.w||0)+1;return;
  }
 }
+//
+// aiShip(u): orders for AI warships (patrol boat, destroyer, submarine,
+// battleship, and carrier if it ever had one).
+//   1. Damaged: head for the nearest AI city and sit there to repair.
+//   2. A player unit on water within 24 sea steps: close in and
+//      attack it.
+//   3. Nothing to hunt: wander one random step at sea. Carriers just
+//      stay put.
 function aiShip(u){
  const sea=passFor('e','sea');
  for(let g=0;g<6&&alive(u)&&u.mv>0;g++){
@@ -298,6 +558,15 @@ function aiShip(u){
   if(opts.length&&u.t!=='C')doStep(u,opts[rnd(opts.length)]);else return;
  }
 }
+//
+// aiFighter(u): orders for one AI fighter, careful about fuel.
+//   1. Hunt: among player units outside cities within 12 squares,
+//      choose the nearest one it can reach AND still fly home from
+//      afterwards with fuel to spare. Fly toward it, attacking when
+//      adjacent.
+//   2. No safe target: if already in a city (or the AI has no cities
+//      left), stay put. Otherwise fly back to the nearest AI city and
+//      stop there.
 function aiFighter(u){
  const air=passFor('e','air');
  for(let g=0;g<10&&alive(u)&&u.mv>0;g++){
@@ -311,6 +580,13 @@ function aiFighter(u){
   if(r&&doStep(u,r.s)){if(safe(u))return;continue;}return;
  }
 }
+//
+// aiTurn(): the AI's whole turn. Production and refits first, then units
+// move grouped by type in a deliberate order: transports first (so they
+// are in place), then warships, carriers, fighters, and armies last (so
+// they can board or leave transports that have just arrived). Ends by
+// burning fuel for any fighters still in the air.
+// Note: the AI reads the true map, so it is not limited by fog of war.
 function aiTurn(){
  beginTurn('e');
  for(const t of 'TDSBPCFA')for(const u of G.units.filter(v=>v.o==='e'&&v.t===t)){
@@ -321,14 +597,29 @@ function aiTurn(){
 }
 
 /* ---------- player ---------- */
+//
+// selU(): the player's currently selected unit, or null.
 const selU=()=>G.sel?byId(G.sel):null;
+// needs(u): does this player unit still want orders this turn?
+// Yes if it has moves left and is not on sentry, skipped or travelling.
 const needs=u=>u.o==='p'&&u.mv>0&&!u.sn&&!u.sk&&u.go===null;
+// selectNext(): keep the current selection if it still needs orders,
+// otherwise select the oldest unit that does, and scroll it into view.
 function selectNext(){const u=selU();if(u&&needs(u))return;const n=G.units.find(needs);G.sel=n?n.id:null;if(n)focus(n.p);}
+// playerPass(u): the pass() test for the player's "go to" paths. Unlike
+// the AI it only uses what the player knows: unexplored squares are
+// assumed passable (optimistic), own cities are open, other cities and
+// visibly occupied squares are blocked, and terrain must suit the unit.
 function playerPass(u){
  const dom=UT[u.t].dom;
  return p=>{if(!G.known[p])return true;const c=cityAt(p);if(c)return c.o==='p';const o=vis[p]?occ(p):null;if(o)return false;
   return dom==='air'||(dom==='land'?G.terr[p]===1:G.terr[p]===0);};
 }
+// runGoto(u): move a unit along its "go to" order, one step at a time,
+// recomputing the path each step. Stops and clears the order when it
+// arrives, when no route exists, or when something blocks the way.
+// If the next step is the destination itself and holds an enemy or a
+// city, the unit attacks it and the order ends.
 function runGoto(u){
  for(let g=0;g<12&&alive(u)&&u.go!==null&&u.mv>0;g++){
   if(u.p===u.go){u.go=null;break;}
@@ -342,11 +633,17 @@ function runGoto(u){
  }
  if(alive(u)&&u.go===u.p)u.go=null;
 }
+// after(): bookkeeping after any player action. Refresh fog of war and the
+// end-of-game check, move the selection on if this unit is finished
+// (no moves, travelling, skipped or on sentry), then redraw.
 function after(){
  dirty();updateVis();checkOver();
  const u=selU();if(!u||u.mv<=0||u.go!==null||u.sk||u.sn){G.sel=null;selectNext();}
  render();
 }
+// moveDir(dx,dy): move the selected unit one square (arrow pad or keys).
+// A unit that moves under its own orders wakes from sentry, unless it
+// just boarded a ship.
 function moveDir(dx,dy){
  const u=selU();if(!u||G.over)return;if(u.mv<=0){log('That unit has no moves left.');render();return;}
  const x=X(u.p)+dx,y=Y(u.p)+dy;if(!inB(x,y))return;
@@ -354,9 +651,22 @@ function moveDir(dx,dy){
  if(alive(u)&&u.cr===null)u.sn=false;
  after();
 }
+// setGoto(u,p): give a multi-turn "go to" order and start moving now.
+// For fighters, warn if the destination is farther from every player
+// city than the fuel remaining (it may not get home).
 function setGoto(u,p){u.go=p;u.sn=false;runGoto(u);
  if(alive(u)&&u.t==='F'){const near=Math.min(...G.cities.filter(c=>c.o==='p').map(c=>cheb(p,c.p)),99);if(near>u.fuel)log('Warning: that fighter may not make it back to a city.');}
  after();}
+//
+// tap(p): what a click or tap on map square p means, in priority order:
+//   1. In "Go to" mode: send the selected unit to p.
+//   2. p is next to the selected unit and the move is legal: step there.
+//   3. p is the selected unit's own square: cycle through the player's
+//      units stacked there (which is how you pick an army off a
+//      transport). After the last one in a city, open the city dialog.
+//   4. p holds player units: select one (preferring one that needs orders).
+//   5. p is a player city with no units: open the city dialog.
+//   6. Anything else: send the selected unit there with "go to".
 function tap(p){
  if(!G||G.over)return;
  const u=selU(),mine=at(p).filter(v=>v.o==='p').sort((a,b)=>(a.cr!==null)-(b.cr!==null)||a.id-b.id);
@@ -370,17 +680,25 @@ function tap(p){
  const c=cityAt(p);if(c&&c.o==='p'){openCity(c);return;}
  if(u)setGoto(u,p);
 }
+//
+// endTurn(): the player's fighters burn fuel, the AI takes its whole
+// turn, then the next player turn starts unless the game ended.
 function endTurn(){
  if(G.over)return;mode=null;
  burnFuel('p');aiTurn();dirty();updateVis();checkOver();
  if(G.over){render();return;}
  G.turn++;playerTurn();
 }
+// playerTurn(): production and refits for the player, then units with
+// "go to" orders travel automatically, then the first unit needing
+// orders is selected. The game autosaves here, once per turn.
 function playerTurn(){
  beginTurn('p');
  for(const u of G.units.filter(v=>v.o==='p'&&v.go!==null))runGoto(u);
  dirty();updateVis();G.sel=null;selectNext();render();save();
 }
+// newGame(): generate a world, give each side its starting city, and
+// set both cities' progress to 4 of 5 so each gets an army on turn 1.
 function newGame(){
  const m=genMap();
  G={turn:1,terr:m.terr,cont:m.cont,cities:m.cities,cg:m.cg,units:[],nid:1,known:new Array(N).fill(0),seen:m.cities.map(()=>null),msgs:[],over:null,sel:null};
@@ -390,11 +708,30 @@ function newGame(){
 }
 
 /* ---------- save ---------- */
+//
+// save() / loadSave(): the whole game state G is stored as JSON in this
+// browser's localStorage under 'empire77'. Finished games are not
+// offered for loading. Any storage error is ignored silently.
 function save(){try{localStorage.setItem('empire77',JSON.stringify(G));}catch(e){}}
 function loadSave(){try{const s=localStorage.getItem('empire77');if(!s)return null;const g=JSON.parse(s);return g&&g.terr&&!g.over?g:null;}catch(e){return null;}}
 
 /* ---------- render ---------- */
+//
+// shown(k): owner to draw for city k. The real owner if it is visible
+// or the player's own, otherwise the owner last seen (null if never).
 function shown(k){const c=G.cities[k];return vis[c.p]||c.o==='p'?(c.o||'n'):G.seen[k];}
+//
+// render(): redraw the whole map canvas, square by square:
+//   unknown squares black; land and sea in bright colours where
+//   visible and dimmed where only remembered; faint wave marks on
+//   visible sea; cities as small buildings in their owner's colour.
+//   Units are drawn only where visible: a circle with the unit letter,
+//   or a square tile when inside a city (enemy units in cities are
+//   hidden). Damaged units get a red health bar, and stacks of more
+//   than one player unit get a count. The selected unit gets a
+//   blinking yellow frame, and its "go to" destination a yellow X.
+// The canvas is sized for the screen's pixel density so text stays
+// sharp. Ends by refreshing the text panels via ui().
 function render(){
  if(!G)return;
  const cv=$('map'),ctx=cv.getContext('2d'),dpr=window.devicePixelRatio||1,w=W*ts,h=H*ts;
@@ -428,6 +765,13 @@ function render(){
   if(sel.go!==null){const gx=X(sel.go)*ts,gy=Y(sel.go)*ts;ctx.strokeStyle='#ffd23f';ctx.beginPath();ctx.moveTo(gx+3,gy+3);ctx.lineTo(gx+ts-3,gy+ts-3);ctx.moveTo(gx+ts-3,gy+3);ctx.lineTo(gx+3,gy+ts-3);ctx.stroke();}}
  ui();
 }
+//
+// ui(): refresh everything outside the map: the status line, the
+// selected unit's details, the last 3 log messages, which buttons
+// are enabled (Board only when a ship with room shares the square,
+// City only inside an own city), the pulsing End turn key once no unit
+// needs orders, and the forces table: player units of each type, and
+// how many player cities are building each type.
 function ui(){
  const mine=G.cities.filter(c=>c.o==='p').length,known=G.cities.filter((c,k)=>shown(k)==='e').length;
  $('stat').textContent=`Turn ${G.turn} · your cities ${mine} of ${G.cities.length} · enemy seen ${known}`;
@@ -443,16 +787,32 @@ function ui(){
  $('bBoard').disabled=!(can&&u.cr===null&&at(u.p).some(v=>v!==u&&v.o==='p'&&v.cr===null&&hasRoom(v,u.t)));
  const c=u&&cityAt(u.p);$('bCity').disabled=!(c&&c.o==='p');
  $('bEnd').classList.toggle('ready',!G.over&&!G.units.some(needs));
+ const have={},make={};for(const t of TYPES){have[t]=0;make[t]=0;}
+ for(const v of G.units)if(v.o==='p')have[v.t]++;
+ for(const c of G.cities)if(c.o==='p')make[c.prod]++;
+ const cell=n=>`<td class="${n?'':'z'}">${n}</td>`;
+ $('forces').innerHTML=`<colgroup><col style="width:88px"></colgroup><thead><tr><th scope="col"></th>${[...TYPES].map(t=>`<th scope="col" title="${UT[t].name}">${t}</th>`).join('')}</tr></thead>
+ <tbody><tr><th scope="row">Units</th>${[...TYPES].map(t=>cell(have[t])).join('')}</tr>
+ <tr><th scope="row">Building</th>${[...TYPES].map(t=>cell(make[t])).join('')}</tr></tbody>`;
 }
+// focus(p): scroll the map so square p is on screen, centring it only
+// when it is near or past an edge (avoids constant jumping).
 function focus(p){const sc=$('scr'),x=X(p)*ts,y=Y(p)*ts;
  if(x<sc.scrollLeft+ts||x>sc.scrollLeft+sc.clientWidth-2*ts)sc.scrollLeft=x-sc.clientWidth/2;
  if(y<sc.scrollTop+ts||y>sc.scrollTop+sc.clientHeight-2*ts)sc.scrollTop=y-sc.clientHeight/2;}
+// zoom(d): change the tile size by d pixels (clamped 10 to 36) while
+// keeping the same map point at the centre of the view.
 function zoom(d){const sc=$('scr'),cx=(sc.scrollLeft+sc.clientWidth/2)/ts,cy=(sc.scrollTop+sc.clientHeight/2)/ts;
  ts=Math.max(10,Math.min(36,ts+d));render();sc.scrollLeft=cx*ts-sc.clientWidth/2;sc.scrollTop=cy*ts-sc.clientHeight/2;}
 
 /* ---------- dialogs ---------- */
+//
+// modal(html) / close(): show or hide the single dialog box.
 function modal(html){$('card').innerHTML=html;$('modal').classList.add('on');}
 function close(){$('modal').classList.remove('on');}
+// openCity(city): production dialog. Lists every unit type the city can
+// build (ships only for coastal cities) with build time. Choosing a
+// different type resets progress to 0, as in the original game.
 function openCity(c){
  const d=UT[c.prod];
  modal(`<h2>City ${xy(c.p)}</h2><p>Building <b>${d.name}</b>: ${c.prog} of ${d.build} turns done.${coastal(c.p)?'':' Inland city, so no ships.'}</p>
@@ -461,10 +821,12 @@ function openCity(c){
  <div class="row"><button class="key" data-x>Done</button></div>`);
  $('card').querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{const t=b.dataset.t;if(t!==c.prod){c.prod=t;c.prog=0;log(`City ${xy(c.p)} now building ${UT[t].name.toLowerCase()}s.`);}close();render();save();});
 }
+// help(): the How to play dialog, with the unit table built from UT.
 function help(){
  modal(`<h2>How to play</h2>
  <p>You start with one city on a mostly unexplored world. Cities build one unit at a time. Armies take neutral and enemy cities: each attempt has a 50% chance, and the army is used up either way. Win by taking every enemy city and wiping out its armies.</p>
- <p>Combat runs in rounds. Each round one side, chosen at random, deals damage equal to its strength. Ships repair one hit per turn in a city. Fighters burn one fuel per square and crash at zero, so bring them home.</p>
+ <p>Combat runs in rounds. Each round one side, chosen at random, deals damage equal to its strength. Ships repair one hit per turn in a city. Fighters burn one fuel per square and crash at zero, so bring them home. A fighter and a submarine don't trade blows: the fighter wins 80% of the time, whoever attacks.</p>
+ <p>The table under the arrow pad counts your units of each type, and how many of your cities are building each type.</p>
  <h3>Units</h3>
  <table><tr><th></th><th>Unit</th><th class="n">Moves</th><th class="n">Hits</th><th class="n">Turns</th></tr>
  ${[...TYPES].map(t=>`<tr><td class="lt">${t}</td><td>${UT[t].name}<br><small style="color:var(--mut)">${UT[t].note}</small></td><td class="n">${UT[t].spd}</td><td class="n">${UT[t].hits}</td><td class="n">${UT[t].build}</td></tr>`).join('')}</table>
@@ -474,11 +836,14 @@ function help(){
  <p style="color:var(--mut);font-size:14px">Blue squares are yours, red the enemy's, white neutral. Faded terrain is remembered, not currently seen. Your game saves itself each turn in this browser.</p>
  <div class="row"><button class="key" data-x>Back to the war</button></div>`);
 }
+// menu(): the main menu dialog (resume, new game, help).
 function menu(){
  modal(`<h2>Empire</h2><p>A tribute to Walter Bright's 1977 game: explore a hidden world, build an army, and conquer every city.</p>
  <div class="row">${G&&!G.over?'<button class="key" data-x>Resume</button>':''}<button class="key go" id="ng">New game</button><button class="key" id="hh">How to play</button></div>`);
  $('ng').onclick=()=>{close();newGame();};$('hh').onclick=help;
 }
+// showOver(): victory or defeat dialog. Also deletes the saved game so
+// a finished war is not offered for continuing.
 function showOver(){
  const win=G.over==='win';
  modal(`<h2>${win?'Victory':'Defeat'}</h2><p>${win?`The enemy empire has fallen on turn ${G.turn}. You hold ${G.cities.filter(c=>c.o==='p').length} cities.`:`Your last city and army are gone on turn ${G.turn}.`}</p>
@@ -488,18 +853,31 @@ function showOver(){
 }
 
 /* ---------- wiring ---------- */
+//
+// Event wiring. Buttons marked data-x close the dialog; clicking the
+// dimmed backdrop closes it too (once a game exists).
 $('card').addEventListener('click',e=>{if(e.target.closest('[data-x]'))close();});
 $('modal').addEventListener('click',e=>{if(e.target.id==='modal'&&G)close();});
+// Convert a click on the canvas to a map square and hand it to tap().
 $('map').addEventListener('click',e=>{const r=$('map').getBoundingClientRect(),x=Math.floor((e.clientX-r.left)/ts),y=Math.floor((e.clientY-r.top)/ts);if(inB(x,y))tap(I(x,y));});
+// Arrow pad: each button carries its direction in data-d="dx,dy".
 $('pad').querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const[dx,dy]=b.dataset.d.split(',').map(Number);moveDir(dx,dy);});
+// Skip: leave this unit alone until next turn. The pad's centre key does the same.
 const skip=()=>{const u=selU();if(!u)return;u.sk=true;after();};
 $('cen').onclick=skip;$('bSkip').onclick=skip;
+// Sentry: stop asking for orders until the player selects it again. Cancels any go to.
 $('bSentry').onclick=()=>{const u=selU();if(!u)return;u.sn=true;u.go=null;after();};
+// Go to: toggle the mode where the next map tap sets the destination.
 $('bGoto').onclick=()=>{if(!selU())return;mode=mode==='goto'?null:'goto';render();};
+// Board: put the selected army or fighter aboard a friendly ship with room
+// that shares its square (used in cities, where moving can't board).
 $('bBoard').onclick=()=>{const u=selU();if(!u)return;const s=at(u.p).find(v=>v!==u&&v.o==='p'&&v.cr===null&&hasRoom(v,u.t));if(!s)return;u.cr=s.id;u.sn=true;if(u.t==='F')u.fuel=UT.F.fuel;after();};
+// City: open the production dialog for the city the selected unit is in.
 $('bCity').onclick=()=>{const u=selU(),c=u&&cityAt(u.p);if(c&&c.o==='p')openCity(c);};
 $('bEnd').onclick=endTurn;
 $('zi').onclick=()=>zoom(4);$('zo').onclick=()=>zoom(-4);$('hlp').onclick=help;$('mnu').onclick=menu;
+// Keyboard: while a dialog is open only Escape works. Otherwise the
+// classic movement keys plus S, Space, G, B, Enter, + and -.
 addEventListener('keydown',e=>{
  if($('modal').classList.contains('on')){if(e.key==='Escape'&&G)close();return;}
  if(!G)return;const k=e.key.toLowerCase();
@@ -508,15 +886,20 @@ addEventListener('keydown',e=>{
  else if(k==='g')$('bGoto').click();else if(k==='b')$('bBoard').click();
  else if(k==='enter')endTurn();else if(k==='+'||k==='=')zoom(4);else if(k==='-')zoom(-4);
 });
+// Blink the selection frame about twice a second.
 setInterval(()=>{blink=!blink;if(G&&G.sel)render();},520);
 addEventListener('resize',()=>render());
 
+//
+// Startup: offer to continue a saved war, or start a new one and show
+// the help dialog the first time.
 const saved=loadSave();
 if(saved){modal(`<h2>Empire</h2><p>A war is already in progress, turn ${saved.turn}.</p>
  <div class="row"><button class="key go" id="cont">Continue</button><button class="key" id="ng">New game</button></div>`);
  $('cont').onclick=()=>{G=saved;OCC=null;close();updateVis();G.sel=null;selectNext();render();};
  $('ng').onclick=()=>{close();newGame();};}
 else{newGame();help();}
+// Redraw once the web fonts load so map letters use VT323.
 document.fonts&&document.fonts.ready.then(()=>render());
 }
 </script>
